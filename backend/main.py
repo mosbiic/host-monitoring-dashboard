@@ -1,6 +1,8 @@
 from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 import psutil
 import asyncio
@@ -276,9 +278,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/", response_model=HealthResponse)
+# Static files - serve frontend build
+frontend_path = "/Users/mosbii/.openclaw/workspace/host-monitoring-dashboard/frontend/dist"
+if os.path.exists(frontend_path):
+    app.mount("/assets", StaticFiles(directory=os.path.join(frontend_path, "assets")), name="assets")
+
+@app.get("/")
 async def root():
-    """Root endpoint - redirects to API health"""
+    """Serve frontend HTML"""
+    frontend_html = os.path.join(frontend_path, "index.html")
+    if os.path.exists(frontend_html):
+        return FileResponse(frontend_html)
     return HealthResponse(status="healthy", timestamp=time.time())
 
 @app.get("/api/health", response_model=HealthResponse)
