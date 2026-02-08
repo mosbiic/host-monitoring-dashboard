@@ -143,324 +143,237 @@ def get_process_info(proc: psutil.Process, now: float) -> Dict:
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         return None
 
+def find_process_by_cmdline_keywords(keywords: List[str], exclude_keywords: List[str] = None, port: int = None) -> Optional[Dict]:
+    """Find process by keywords in cmdline, optionally verify by port"""
+    exclude_keywords = exclude_keywords or []
+    now = time.time()
+    
+    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+        try:
+            cmdline = ' '.join(proc.info['cmdline'] or [])
+            cmdline_lower = cmdline.lower()
+            
+            # Check if all keywords match
+            matches_all = all(kw.lower() in cmdline_lower for kw in keywords)
+            
+            # Check if any exclude keyword matches
+            excluded = any(excl.lower() in cmdline_lower for excl in exclude_keywords)
+            
+            if matches_all and not excluded:
+                # If port specified, verify the process is listening on that port
+                if port:
+                    try:
+                        p = psutil.Process(proc.info['pid'])
+                        for conn in p.connections(kind='inet'):
+                            if conn.status == 'LISTEN' and conn.laddr.port == port:
+                                info = get_process_info(p, now)
+                                if info:
+                                    info['port'] = port
+                                    return info
+                    except:
+                        pass
+                else:
+                    info = get_process_info(psutil.Process(proc.info['pid']), now)
+                    if info:
+                        return info
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return None
+
+def find_ollama_process(now: float) -> Optional[Dict]:
+    """Find Ollama process by name or port"""
+    # First try by process name
+    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+        try:
+            proc_name = (proc.info['name'] or '').lower()
+            if 'ollama' in proc_name:
+                info = get_process_info(psutil.Process(proc.info['pid']), now)
+                if info:
+                    info['port'] = 11434
+                    return info
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    
+    # Fallback: find by port
+    proc = find_process_by_port(11434)
+    if proc:
+        info = get_process_info(proc, now)
+        if info:
+            info['port'] = 11434
+            return info
+    return None
+
+def find_cloudflared_process(now: float) -> Optional[Dict]:
+    """Find Cloudflared process by name"""
+    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+        try:
+            proc_name = (proc.info['name'] or '').lower()
+            cmdline = ' '.join(proc.info['cmdline'] or []).lower()
+            if 'cloudflared' in proc_name or 'cloudflared' in cmdline:
+                info = get_process_info(psutil.Process(proc.info['pid']), now)
+                if info:
+                    return info
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return None
+
+def find_knowledge_graph_backend(now: float) -> Optional[Dict]:
+    """Find Knowledge Graph backend by cmdline containing port 8000 or 8001"""
+    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+        try:
+            cmdline = ' '.join(proc.info['cmdline'] or [])
+            cmdline_lower = cmdline.lower()
+            
+            # Match uvicorn with port 8000 or 8001
+            if 'uvicorn' in cmdline_lower:
+                port = None
+                if '--port 8000' in cmdline or 'port 8000' in cmdline_lower:
+                    port = 8000
+                elif '--port 8001' in cmdline or 'port 8001' in cmdline_lower:
+                    port = 8001
+                
+                if port:
+                    info = get_process_info(psutil.Process(proc.info['pid']), now)
+                    if info:
+                        info['port'] = port
+                        return info
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return None
+
+def find_vite_process_by_path(path_keyword: str, default_port: int, now: float) -> Optional[Dict]:
+    """Find Vite dev server by path keyword, extract port from cmdline"""
+    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+        try:
+            cmdline = ' '.join(proc.info['cmdline'] or [])
+            cmdline_lower = cmdline.lower()
+            
+            # Match node process with vite in the path containing the keyword
+            is_node = 'node' in (proc.info['name'] or '').lower() or 'node' in cmdline_lower
+            has_vite = 'vite' in cmdline_lower
+            has_path = path_keyword.lower() in cmdline_lower
+            
+            if is_node and has_vite and has_path:
+                info = get_process_info(psutil.Process(proc.info['pid']), now)
+                if info:
+                    # Extract port from cmdline (e.g., --port 3001 or --port=3001)
+                    port = default_port
+                    import re
+                    port_match = re.search(r'--port[=\s]*(\d+)', cmdline)
+                    if port_match:
+                        port = int(port_match.group(1))
+                    else:
+                        # Try to get from connections (if we have permission)
+                        try:
+                            for conn in psutil.Process(proc.info['pid']).connections(kind='inet'):
+                                if conn.status == 'LISTEN':
+                                    port = conn.laddr.port
+                                    break
+                        except:
+                            pass
+                    info['port'] = port
+                    return info
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return None
+
 def get_process_metrics() -> ProcessMetrics:
     """Collect OpenClaw, project process metrics"""
     processes = []
     now = time.time()
     
-    # Helper function to find process by name in cmdline
-    def find_by_cmdline(patterns):
-        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-            try:
-                cmdline = ' '.join(proc.info['cmdline'] or [])
-                for pattern in patterns:
-                    if pattern.lower() in cmdline.lower():
-                        return psutil.Process(proc.info['pid'])
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        return None
-    
     # 1. OpenClaw Gateway - check by cmdline
-    gateway_proc = find_by_cmdline(['openclaw-gateway'])
-    if gateway_proc:
-        info = get_process_info(gateway_proc, now)
-        if info:
-            processes.append(ProcessStatus(
-                name="OpenClaw Gateway",
-                running=True,
-                pid=info['pid'],
-                port=18789,
-                cpu_percent=info['cpu_percent'],
-                memory_percent=info['memory_percent'],
-                uptime_seconds=info['uptime_seconds'],
-                cmdline=info['cmdline']
-            ))
-        else:
-            processes.append(ProcessStatus(name="OpenClaw Gateway", running=False))
+    gateway_info = find_process_by_cmdline_keywords(
+        ['openclaw-gateway'],
+        exclude_keywords=['grep']
+    )
+    if gateway_info:
+        gateway_info['port'] = 18789
+        processes.append(ProcessStatus(name="OpenClaw Gateway", running=True, **gateway_info))
     else:
-        # Fallback to port check
-        gateway_proc = find_process_by_port(18789)
-        if gateway_proc:
-            info = get_process_info(gateway_proc, now)
-            if info:
-                processes.append(ProcessStatus(
-                    name="OpenClaw Gateway",
-                    running=True,
-                    pid=info['pid'],
-                    port=18789,
-                    cpu_percent=info['cpu_percent'],
-                    memory_percent=info['memory_percent'],
-                    uptime_seconds=info['uptime_seconds'],
-                    cmdline=info['cmdline']
-                ))
-            else:
-                processes.append(ProcessStatus(name="OpenClaw Gateway", running=False))
-        else:
-            processes.append(ProcessStatus(name="OpenClaw Gateway", running=False))
+        processes.append(ProcessStatus(name="OpenClaw Gateway", running=False))
     
     # 2. OpenClaw Node - check by cmdline
-    node_proc = find_by_cmdline(['openclaw-node'])
-    if node_proc:
-        info = get_process_info(node_proc, now)
-        if info:
-            processes.append(ProcessStatus(
-                name="OpenClaw Node",
-                running=True,
-                pid=info['pid'],
-                cpu_percent=info['cpu_percent'],
-                memory_percent=info['memory_percent'],
-                uptime_seconds=info['uptime_seconds'],
-                cmdline=info['cmdline']
-            ))
-        else:
-            processes.append(ProcessStatus(name="OpenClaw Node", running=False))
+    node_info = find_process_by_cmdline_keywords(
+        ['openclaw-node'],
+        exclude_keywords=['grep']
+    )
+    if node_info:
+        processes.append(ProcessStatus(name="OpenClaw Node", running=True, **node_info))
     else:
         processes.append(ProcessStatus(name="OpenClaw Node", running=False))
     
     # 3. OpenClaw TUI - check by process name
-    tui_procs = find_processes_by_name(
+    tui_info = find_process_by_cmdline_keywords(
         ['openclaw-tui'],
-        exclude_patterns=['grep']
+        exclude_keywords=['grep']
     )
-    
-    if tui_procs:
-        proc = tui_procs[0]
-        info = get_process_info(proc, now)
-        if info:
-            processes.append(ProcessStatus(
-                name="OpenClaw TUI",
-                running=True,
-                pid=info['pid'],
-                cpu_percent=info['cpu_percent'],
-                memory_percent=info['memory_percent'],
-                uptime_seconds=info['uptime_seconds'],
-                cmdline=info['cmdline']
-            ))
-        else:
-            processes.append(ProcessStatus(name="OpenClaw TUI", running=False))
+    if tui_info:
+        processes.append(ProcessStatus(name="OpenClaw TUI", running=True, **tui_info))
     else:
         processes.append(ProcessStatus(name="OpenClaw TUI", running=False))
     
-    # 4. Ollama - check by port or process name
-    ollama_procs = find_processes_by_name(
-        ['ollama'],
-        exclude_patterns=['grep']
-    )
-    
-    if ollama_procs:
-        proc = ollama_procs[0]
-        info = get_process_info(proc, now)
-        if info:
-            processes.append(ProcessStatus(
-                name="Ollama",
-                running=True,
-                pid=info['pid'],
-                port=11434,
-                cpu_percent=info['cpu_percent'],
-                memory_percent=info['memory_percent'],
-                uptime_seconds=info['uptime_seconds'],
-                cmdline=info['cmdline']
-            ))
-        else:
-            processes.append(ProcessStatus(name="Ollama", running=False))
+    # 4. Ollama - check by process name or port
+    ollama_info = find_ollama_process(now)
+    if ollama_info:
+        processes.append(ProcessStatus(name="Ollama", running=True, **ollama_info))
     else:
-        # Fallback to port check
-        ollama_proc = find_process_by_port(11434)
-        if ollama_proc:
-            info = get_process_info(ollama_proc, now)
-            if info:
-                processes.append(ProcessStatus(
-                    name="Ollama",
-                    running=True,
-                    pid=info['pid'],
-                    port=11434,
-                    cpu_percent=info['cpu_percent'],
-                    memory_percent=info['memory_percent'],
-                    uptime_seconds=info['uptime_seconds'],
-                    cmdline=info['cmdline']
-                ))
-            else:
-                processes.append(ProcessStatus(name="Ollama", running=False))
-        else:
-            processes.append(ProcessStatus(name="Ollama", running=False))
+        processes.append(ProcessStatus(name="Ollama", running=False))
     
     # 5. Cloudflared - check by process name
-    cloudflared_procs = find_processes_by_name(
-        ['cloudflared'],
-        exclude_patterns=['grep']
-    )
-    
-    if cloudflared_procs:
-        proc = cloudflared_procs[0]
-        info = get_process_info(proc, now)
-        if info:
-            processes.append(ProcessStatus(
-                name="Cloudflared",
-                running=True,
-                pid=info['pid'],
-                cpu_percent=info['cpu_percent'],
-                memory_percent=info['memory_percent'],
-                uptime_seconds=info['uptime_seconds'],
-                cmdline=info['cmdline']
-            ))
-        else:
-            processes.append(ProcessStatus(name="Cloudflared", running=False))
+    cloudflared_info = find_cloudflared_process(now)
+    if cloudflared_info:
+        processes.append(ProcessStatus(name="Cloudflared", running=True, **cloudflared_info))
     else:
         processes.append(ProcessStatus(name="Cloudflared", running=False))
     
-    # 6. Monitoring Dashboard - check by process path and main.py
-    dashboard_procs = find_processes_by_name(
-        ['host-monitoring-dashboard'],
-        exclude_patterns=['grep', 'tail']
+    # 6. Monitoring Dashboard Backend - check by port 8081 or path
+    dashboard_info = find_process_by_cmdline_keywords(
+        ['host-monitoring-dashboard', 'main.py'],
+        exclude_keywords=['grep', 'node', 'vite']
     )
-    
-    if dashboard_procs:
-        proc = dashboard_procs[0]
-        info = get_process_info(proc, now)
-        if info:
-            processes.append(ProcessStatus(
-                name="Monitoring Dashboard",
-                running=True,
-                pid=info['pid'],
-                port=8081,
-                cpu_percent=info['cpu_percent'],
-                memory_percent=info['memory_percent'],
-                uptime_seconds=info['uptime_seconds'],
-                cmdline=info['cmdline']
-            ))
-        else:
-            processes.append(ProcessStatus(name="Monitoring Dashboard", running=False))
+    if dashboard_info:
+        # Try to determine port from connections
+        try:
+            proc = psutil.Process(dashboard_info['pid'])
+            for conn in proc.connections(kind='inet'):
+                if conn.status == 'LISTEN':
+                    dashboard_info['port'] = conn.laddr.port
+                    break
+        except:
+            dashboard_info['port'] = 8081  # Default
+        processes.append(ProcessStatus(name="Monitoring Dashboard", running=True, **dashboard_info))
     else:
-        # Fallback to port check
+        # Fallback: check port 8081
         dashboard_proc = find_process_by_port(8081)
         if dashboard_proc:
-            info = get_process_info(dashboard_proc, now)
-            if info:
-                processes.append(ProcessStatus(
-                    name="Monitoring Dashboard",
-                    running=True,
-                    pid=info['pid'],
-                    port=8081,
-                    cpu_percent=info['cpu_percent'],
-                    memory_percent=info['memory_percent'],
-                    uptime_seconds=info['uptime_seconds'],
-                    cmdline=info['cmdline']
-                ))
+            dashboard_info = get_process_info(dashboard_proc, now)
+            if dashboard_info:
+                dashboard_info['port'] = 8081
+                processes.append(ProcessStatus(name="Monitoring Dashboard", running=True, **dashboard_info))
             else:
                 processes.append(ProcessStatus(name="Monitoring Dashboard", running=False))
         else:
             processes.append(ProcessStatus(name="Monitoring Dashboard", running=False))
     
-    # 7. Knowledge Graph Backend - check by port 8000/8001 or process path
-    kg_backend_procs = find_processes_by_name(
-        ['knowledge-graph', 'uvicorn'],
-        exclude_patterns=['grep', 'esbuild']
-    )
-    
-    # Filter to only those actually in knowledge-graph path
-    kg_backend = None
-    for proc in kg_backend_procs:
-        try:
-            cmdline = ' '.join(proc.cmdline() or [])
-            if 'knowledge-graph' in cmdline.lower():
-                kg_backend = proc
-                break
-        except:
-            pass
-    
-    if kg_backend:
-        info = get_process_info(kg_backend, now)
-        if info:
-            # Try to find the port
-            port = None
-            try:
-                for conn in kg_backend.connections(kind='inet'):
-                    if conn.status == 'LISTEN':
-                        port = conn.laddr.port
-                        break
-            except:
-                pass
-            
-            processes.append(ProcessStatus(
-                name="Knowledge Graph API",
-                running=True,
-                pid=info['pid'],
-                port=port or 8000,
-                cpu_percent=info['cpu_percent'],
-                memory_percent=info['memory_percent'],
-                uptime_seconds=info['uptime_seconds'],
-                cmdline=info['cmdline']
-            ))
-        else:
-            processes.append(ProcessStatus(name="Knowledge Graph API", running=False))
+    # 7. Knowledge Graph Backend
+    kg_backend_info = find_knowledge_graph_backend(now)
+    if kg_backend_info:
+        processes.append(ProcessStatus(name="Knowledge Graph API", running=True, **kg_backend_info))
     else:
         processes.append(ProcessStatus(name="Knowledge Graph API", running=False))
     
-    # 8. Knowledge Graph Frontend - check by vite and path
-    kg_frontend_procs = find_processes_by_name(
-        ['knowledge-graph'],
-        exclude_patterns=['grep', 'esbuild', 'backend', 'uvicorn']
-    )
-    
-    kg_frontend = None
-    for proc in kg_frontend_procs:
-        try:
-            cmdline = ' '.join(proc.cmdline() or [])
-            if 'vite' in cmdline.lower() and 'frontend' in cmdline.lower():
-                kg_frontend = proc
-                break
-        except:
-            pass
-    
-    if kg_frontend:
-        info = get_process_info(kg_frontend, now)
-        if info:
-            processes.append(ProcessStatus(
-                name="Knowledge Graph UI",
-                running=True,
-                pid=info['pid'],
-                port=5174,
-                cpu_percent=info['cpu_percent'],
-                memory_percent=info['memory_percent'],
-                uptime_seconds=info['uptime_seconds'],
-                cmdline=info['cmdline']
-            ))
-        else:
-            processes.append(ProcessStatus(name="Knowledge Graph UI", running=False))
+    # 8. Knowledge Graph Frontend - Vite dev server
+    kg_frontend_info = find_vite_process_by_path('knowledge-graph', 5173, now)
+    if kg_frontend_info:
+        processes.append(ProcessStatus(name="Knowledge Graph UI", running=True, **kg_frontend_info))
     else:
         processes.append(ProcessStatus(name="Knowledge Graph UI", running=False))
     
-    # 9. Personal Dashboard Frontend - check by vite and path
-    personal_dashboard_procs = find_processes_by_name(
-        ['personal-dashboard'],
-        exclude_patterns=['grep', 'esbuild']
-    )
-    
-    personal_frontend = None
-    for proc in personal_dashboard_procs:
-        try:
-            cmdline = ' '.join(proc.cmdline() or [])
-            if 'vite' in cmdline.lower():
-                personal_frontend = proc
-                break
-        except:
-            pass
-    
-    if personal_frontend:
-        info = get_process_info(personal_frontend, now)
-        if info:
-            processes.append(ProcessStatus(
-                name="Personal Dashboard",
-                running=True,
-                pid=info['pid'],
-                port=5173,
-                cpu_percent=info['cpu_percent'],
-                memory_percent=info['memory_percent'],
-                uptime_seconds=info['uptime_seconds'],
-                cmdline=info['cmdline']
-            ))
-        else:
-            processes.append(ProcessStatus(name="Personal Dashboard", running=False))
+    # 9. Personal Dashboard Frontend - Vite dev server
+    personal_info = find_vite_process_by_path('personal-dashboard', 5173, now)
+    if personal_info:
+        processes.append(ProcessStatus(name="Personal Dashboard", running=True, **personal_info))
     else:
         processes.append(ProcessStatus(name="Personal Dashboard", running=False))
     
@@ -577,18 +490,43 @@ async def get_current_process_metrics(token: str = Depends(verify_token)):
     """Get current process metrics"""
     return get_process_metrics()
 
+def downsample_data(data: List[Dict], max_points: int = 500) -> List[Dict]:
+    """Downsample data to max_points for efficient rendering"""
+    if len(data) <= max_points:
+        return data
+    
+    # Use systematic sampling to reduce points
+    step = len(data) // max_points
+    return data[::step]
+
 @app.get("/api/metrics/history")
 async def get_metrics_history(
     hours: int = 24,
     token: str = Depends(verify_token)
 ):
-    """Get historical metrics for the specified time period"""
+    """Get historical metrics for the specified time period with downsampling"""
     cutoff = time.time() - (hours * 3600)
     filtered_history = [m for m in metrics_history if m["timestamp"] > cutoff]
+    
+    # Sort by timestamp to ensure correct order
+    filtered_history.sort(key=lambda x: x["timestamp"])
+    
+    # Downsample based on time range
+    # Longer periods need more aggressive downsampling
+    if hours <= 24:
+        max_points = 500
+    elif hours <= 72:  # 3 days
+        max_points = 400
+    else:  # 7 days
+        max_points = 300
+    
+    downsampled = downsample_data(filtered_history, max_points)
+    
     return {
         "hours": hours,
-        "data_points": len(filtered_history),
-        "data": filtered_history
+        "data_points": len(downsampled),
+        "total_points": len(filtered_history),
+        "data": downsampled
     }
 
 @app.websocket("/ws/metrics")
