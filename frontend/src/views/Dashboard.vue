@@ -572,13 +572,48 @@ export default {
     })
     
     onMounted(async () => {
-      // Initial data fetch
-      await metricsStore.fetchSystemMetrics()
-      await metricsStore.fetchProcessMetrics()
-      await metricsStore.fetchHistory(timeRange.value)
+      // Check if token exists
+      if (!authStore.token) {
+        router.push('/login')
+        return
+      }
+      
+      // Initial data fetch with error handling
+      try {
+        await metricsStore.fetchSystemMetrics()
+      } catch (error) {
+        if (error.response?.status === 401) {
+          // Token invalid, logout handled by interceptor
+          return
+        }
+        console.error('Failed to fetch system metrics:', error)
+      }
+      
+      try {
+        await metricsStore.fetchProcessMetrics()
+      } catch (error) {
+        if (error.response?.status === 401) {
+          return
+        }
+        console.error('Failed to fetch process metrics:', error)
+      }
+      
+      try {
+        await metricsStore.fetchHistory(timeRange.value)
+      } catch (error) {
+        if (error.response?.status === 401) {
+          return
+        }
+        console.error('Failed to fetch history:', error)
+      }
       
       // Connect WebSocket
-      metricsStore.connectWebSocket(authStore.token)
+      metricsStore.connectWebSocket(authStore.token, (isAuthError) => {
+        if (isAuthError) {
+          // WebSocket auth failed, logout and redirect
+          logout()
+        }
+      })
       
       // Initialize charts
       await nextTick()

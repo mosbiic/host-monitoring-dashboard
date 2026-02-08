@@ -60,14 +60,29 @@ export default {
       error.value = ''
       
       try {
-        // Verify token by making a test request
-        const response = await axios.get('/api/health')
+        // Set token temporarily for validation
+        const testToken = tokenInput.value
         
-        // Set token and redirect
-        authStore.setToken(tokenInput.value)
+        // Verify token by making a test request with token
+        const response = await axios.get('/api/health', {
+          headers: {
+            'Authorization': `Bearer ${testToken}`
+          }
+        })
+        
+        // Token is valid, set it permanently and redirect
+        authStore.setToken(testToken)
         router.push('/dashboard')
       } catch (err) {
-        error.value = 'Invalid token or connection failed'
+        if (err.response?.status === 401) {
+          error.value = 'Invalid token. Please check your token and try again.'
+        } else if (err.response?.status === 403) {
+          error.value = 'Access denied. Token may be expired or invalid.'
+        } else if (err.code === 'ECONNREFUSED' || err.message?.includes('Network Error')) {
+          error.value = 'Cannot connect to server. Please check if the backend is running.'
+        } else {
+          error.value = err.response?.data?.error || 'Invalid token or connection failed'
+        }
       } finally {
         loading.value = false
       }

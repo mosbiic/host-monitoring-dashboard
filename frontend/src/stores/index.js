@@ -1,8 +1,30 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import axios from 'axios'
+import router from '../router'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
+
+// Global axios interceptors for 401 handling
+let onUnauthorizedCallback = null
+
+export function setOnUnauthorizedCallback(callback) {
+  onUnauthorizedCallback = callback
+}
+
+// Setup axios interceptors
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      console.warn('Unauthorized: Token is invalid or expired')
+      if (onUnauthorizedCallback) {
+        onUnauthorizedCallback()
+      }
+    }
+    return Promise.reject(error)
+  }
+)
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref(localStorage.getItem('dashboard_token') || '')
@@ -25,6 +47,12 @@ export const useAuthStore = defineStore('auth', () => {
   if (token.value) {
     axios.defaults.headers.common['Authorization'] = `Bearer ${token.value}`
   }
+  
+  // Set up unauthorized callback
+  setOnUnauthorizedCallback(() => {
+    logout()
+    router.push('/login')
+  })
   
   return { token, isAuthenticated, setToken, logout }
 })
@@ -72,7 +100,7 @@ export const useMetricsStore = defineStore('metrics', () => {
     }
   }
   
-  function connectWebSocket(token) {
+  function connectWebSocket(token, onAuthError = null) {
     if (ws) {
       ws.close()
     }
@@ -96,6 +124,19 @@ export const useMetricsStore = defineStore('metrics', () => {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data)
+        
+        // Check for auth errors from server
+        if (data.error) {
+          console.error('WebSocket error message:', data.error)
+          if (data.error.includes('Unauthorized') || data.error.includes('Invalid token')) {
+            wsConnected.value = false
+            if (onAuthError) {
+              onAuthError(true)
+            }
+            return
+          }
+        }
+        
         if (data.system) {
           systemMetrics.value = data.system
         }
@@ -113,14 +154,23 @@ export const useMetricsStore = defineStore('metrics', () => {
       wsConnected.value = false
     }
     
-    ws.onclose = () => {
-      console.log('WebSocket disconnected')
+    ws.onclose = (event) => {
+      console.log('WebSocket disconnected:', event.code, event.reason)
       wsConnected.value = false
       
-      // Auto-reconnect after 5 seconds
+      // Check if closed due to authentication (code 1008 = policy violation)
+      if (event.code === 1008 || event.code === 1001) {
+        console.warn('WebSocket closed possibly due to auth failure')
+        if (onAuthError) {
+          onAuthError(true)
+          return
+        }
+      }
+      
+      // Auto-reconnect after 5 seconds (unless auth error)
       reconnectTimeout = setTimeout(() => {
-        if (token) {
-          connectWebSocket(token)
+        if (token && !wsConnected.value) {
+          connectWebSocket(token, onAuthError)
         }
       }, 5000)
     }
