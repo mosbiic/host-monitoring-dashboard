@@ -143,23 +143,31 @@ def get_process_info(proc: psutil.Process, now: float) -> Dict:
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         return None
 
-def find_process_by_cmdline_keywords(keywords: List[str], exclude_keywords: List[str] = None, port: int = None) -> Optional[Dict]:
-    """Find process by keywords in cmdline, optionally verify by port"""
+def find_process_by_cmdline_keywords(keywords: List[str], exclude_keywords: List[str] = None, port: int = None, 
+                                      proc_name_patterns: List[str] = None) -> Optional[Dict]:
+    """Find process by keywords in cmdline or process name, optionally verify by port"""
     exclude_keywords = exclude_keywords or []
+    proc_name_patterns = proc_name_patterns or []
     now = time.time()
     
     for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
         try:
-            cmdline = ' '.join(proc.info['cmdline'] or [])
+            proc_name = proc.info['name'] or ''
+            cmdline_list = proc.info['cmdline'] or []
+            cmdline = ' '.join(cmdline_list)
             cmdline_lower = cmdline.lower()
+            proc_name_lower = proc_name.lower()
             
-            # Check if all keywords match
-            matches_all = all(kw.lower() in cmdline_lower for kw in keywords)
+            # Check if all keywords match in cmdline
+            matches_cmdline = all(kw.lower() in cmdline_lower for kw in keywords)
+            
+            # Check if process name matches any pattern
+            matches_name = any(pattern.lower() in proc_name_lower for pattern in proc_name_patterns)
             
             # Check if any exclude keyword matches
             excluded = any(excl.lower() in cmdline_lower for excl in exclude_keywords)
             
-            if matches_all and not excluded:
+            if (matches_cmdline or matches_name) and not excluded:
                 # If port specified, verify the process is listening on that port
                 if port:
                     try:
@@ -282,10 +290,11 @@ def get_process_metrics() -> ProcessMetrics:
     processes = []
     now = time.time()
     
-    # 1. OpenClaw Gateway - check by cmdline
+    # 1. OpenClaw Gateway - check by process name or cmdline
     gateway_info = find_process_by_cmdline_keywords(
         ['openclaw-gateway'],
-        exclude_keywords=['grep']
+        exclude_keywords=['grep'],
+        proc_name_patterns=['openclaw-gateway']
     )
     if gateway_info:
         gateway_info['port'] = 18789
@@ -293,20 +302,22 @@ def get_process_metrics() -> ProcessMetrics:
     else:
         processes.append(ProcessStatus(name="OpenClaw Gateway", running=False))
     
-    # 2. OpenClaw Node - check by cmdline
+    # 2. OpenClaw Node - check by process name or cmdline
     node_info = find_process_by_cmdline_keywords(
         ['openclaw-node'],
-        exclude_keywords=['grep']
+        exclude_keywords=['grep'],
+        proc_name_patterns=['openclaw-node']
     )
     if node_info:
         processes.append(ProcessStatus(name="OpenClaw Node", running=True, **node_info))
     else:
         processes.append(ProcessStatus(name="OpenClaw Node", running=False))
     
-    # 3. OpenClaw TUI - check by process name
+    # 3. OpenClaw TUI - check by process name or cmdline
     tui_info = find_process_by_cmdline_keywords(
         ['openclaw-tui'],
-        exclude_keywords=['grep']
+        exclude_keywords=['grep'],
+        proc_name_patterns=['openclaw-tui']
     )
     if tui_info:
         processes.append(ProcessStatus(name="OpenClaw TUI", running=True, **tui_info))
@@ -327,32 +338,24 @@ def get_process_metrics() -> ProcessMetrics:
     else:
         processes.append(ProcessStatus(name="Cloudflared", running=False))
     
-    # 6. Monitoring Dashboard Backend - check by port 8081 or path
-    dashboard_info = find_process_by_cmdline_keywords(
-        ['host-monitoring-dashboard', 'main.py'],
-        exclude_keywords=['grep', 'node', 'vite']
-    )
-    if dashboard_info:
-        # Try to determine port from connections
-        try:
-            proc = psutil.Process(dashboard_info['pid'])
-            for conn in proc.connections(kind='inet'):
-                if conn.status == 'LISTEN':
-                    dashboard_info['port'] = conn.laddr.port
-                    break
-        except:
-            dashboard_info['port'] = 8081  # Default
-        processes.append(ProcessStatus(name="Monitoring Dashboard", running=True, **dashboard_info))
+    # 6. Monitoring Dashboard Backend - check by port 8081 or path/cmdline
+    dashboard_proc = find_process_by_port(8081)
+    if dashboard_proc:
+        dashboard_info = get_process_info(dashboard_proc, now)
+        if dashboard_info:
+            dashboard_info['port'] = 8081
+            processes.append(ProcessStatus(name="Monitoring Dashboard", running=True, **dashboard_info))
+        else:
+            processes.append(ProcessStatus(name="Monitoring Dashboard", running=False))
     else:
-        # Fallback: check port 8081
-        dashboard_proc = find_process_by_port(8081)
-        if dashboard_proc:
-            dashboard_info = get_process_info(dashboard_proc, now)
-            if dashboard_info:
-                dashboard_info['port'] = 8081
-                processes.append(ProcessStatus(name="Monitoring Dashboard", running=True, **dashboard_info))
-            else:
-                processes.append(ProcessStatus(name="Monitoring Dashboard", running=False))
+        # Fallback: try to find by cmdline keywords
+        dashboard_info = find_process_by_cmdline_keywords(
+            ['main.py'],
+            exclude_keywords=['grep', 'node', 'vite', 'personal-dashboard', 'knowledge-graph']
+        )
+        if dashboard_info:
+            dashboard_info['port'] = 8081
+            processes.append(ProcessStatus(name="Monitoring Dashboard", running=True, **dashboard_info))
         else:
             processes.append(ProcessStatus(name="Monitoring Dashboard", running=False))
     
@@ -370,12 +373,26 @@ def get_process_metrics() -> ProcessMetrics:
     else:
         processes.append(ProcessStatus(name="Knowledge Graph UI", running=False))
     
-    # 9. Personal Dashboard Frontend - Vite dev server
-    personal_info = find_vite_process_by_path('personal-dashboard', 5173, now)
+    # 9. Personal Dashboard Backend - Python uvicorn on port 8000
+    personal_info = find_process_by_cmdline_keywords(
+        ['personal-dashboard', 'uvicorn'],
+        exclude_keywords=['grep']
+    )
     if personal_info:
+        personal_info['port'] = 8000
         processes.append(ProcessStatus(name="Personal Dashboard", running=True, **personal_info))
     else:
-        processes.append(ProcessStatus(name="Personal Dashboard", running=False))
+        # Fallback: check port 8000
+        personal_proc = find_process_by_port(8000)
+        if personal_proc:
+            personal_info = get_process_info(personal_proc, now)
+            if personal_info:
+                personal_info['port'] = 8000
+                processes.append(ProcessStatus(name="Personal Dashboard", running=True, **personal_info))
+            else:
+                processes.append(ProcessStatus(name="Personal Dashboard", running=False))
+        else:
+            processes.append(ProcessStatus(name="Personal Dashboard", running=False))
     
     return ProcessMetrics(timestamp=now, processes=processes)
 
@@ -555,11 +572,14 @@ async def websocket_endpoint(websocket: WebSocket):
         # Keep connection alive and handle client messages
         while True:
             try:
-                # Use timeout to allow periodic metrics updates even without client messages
+                # Use timeout to allow periodic checks
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-                # Handle ping/pong or other client messages
+                # Handle ping/pong from client
                 if data == "ping":
                     await websocket.send_text("pong")
+                elif data == "pong":
+                    # Client responded to our ping, connection is alive
+                    pass
             except asyncio.TimeoutError:
                 # Send ping to keep connection alive
                 try:

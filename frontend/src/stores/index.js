@@ -123,6 +123,16 @@ export const useMetricsStore = defineStore('metrics', () => {
     
     ws.onmessage = (event) => {
       try {
+        // Handle ping/pong messages
+        if (event.data === 'ping') {
+          ws.send('pong')
+          return
+        }
+        if (event.data === 'pong') {
+          // Connection is alive
+          return
+        }
+        
         const data = JSON.parse(event.data)
         
         // Check for auth errors from server
@@ -144,7 +154,7 @@ export const useMetricsStore = defineStore('metrics', () => {
           processMetrics.value = { timestamp: data.timestamp, processes: data.processes }
         }
       } catch (error) {
-        console.error('Failed to parse WebSocket message:', error)
+        console.error('Failed to parse WebSocket message:', error, 'Data:', event.data)
       }
     }
     
