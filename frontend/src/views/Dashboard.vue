@@ -120,13 +120,127 @@
       </div>
     </section>
     
-    <!-- Process Status Cards -->
+    <!-- OpenClaw Core Services -->
     <section class="mb-6">
-      <h2 class="text-xl font-bold mb-4">🔧 Process Status</h2>
+      <h2 class="text-xl font-bold mb-4">🔧 OpenClaw Core Services</h2>
       
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <div 
-          v-for="proc in processMetrics?.processes" 
+          v-for="proc in openclawProcesses" 
+          :key="proc.name"
+          class="bg-gray-800 rounded-lg p-6 card-hover transition"
+          :class="{ 'opacity-75': !proc.running }"
+        >
+          <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2">
+              <div 
+                class="w-3 h-3 rounded-full"
+                :class="proc.running ? 'bg-green-500 animate-pulse' : 'bg-red-500'"
+              ></div>
+              <span class="font-bold">{{ proc.name }}</span>
+            </div>
+            <span 
+              :class="proc.running ? 'text-green-400' : 'text-red-400'"
+              class="text-sm font-medium"
+            >
+              {{ proc.running ? 'RUNNING' : 'STOPPED' }}
+            </span>
+          </div>
+          
+          <div class="space-y-2 text-sm">
+            <div v-if="proc.pid" class="flex justify-between">
+              <span class="text-gray-400">PID:</span>
+              <span class="font-mono">{{ proc.pid }}</span>
+            </div>
+            
+            <div v-if="proc.port" class="flex justify-between">
+              <span class="text-gray-400">Port:</span>
+              <span class="font-mono">{{ proc.port }}</span>
+            </div>
+            
+            <div v-if="proc.cpu_percent !== null" class="flex justify-between">
+              <span class="text-gray-400">CPU:</span>
+              <span>{{ proc.cpu_percent }}%</span>
+            </div>
+            
+            <div v-if="proc.memory_percent !== null" class="flex justify-between">
+              <span class="text-gray-400">Memory:</span>
+              <span>{{ proc.memory_percent.toFixed(2) }}%</span>
+            </div>
+            
+            <div v-if="proc.uptime_seconds" class="flex justify-between">
+              <span class="text-gray-400">Uptime:</span>
+              <span>{{ formatDuration(proc.uptime_seconds) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- External Services -->
+    <section class="mb-6">
+      <h2 class="text-xl font-bold mb-4">🌐 External Services</h2>
+      
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div 
+          v-for="proc in externalProcesses" 
+          :key="proc.name"
+          class="bg-gray-800 rounded-lg p-6 card-hover transition"
+          :class="{ 'opacity-75': !proc.running }"
+        >
+          <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2">
+              <div 
+                class="w-3 h-3 rounded-full"
+                :class="proc.running ? 'bg-green-500 animate-pulse' : 'bg-red-500'"
+              ></div>
+              <span class="font-bold">{{ proc.name }}</span>
+            </div>
+            <span 
+              :class="proc.running ? 'text-green-400' : 'text-red-400'"
+              class="text-sm font-medium"
+            >
+              {{ proc.running ? 'RUNNING' : 'STOPPED' }}
+            </span>
+          </div>
+          
+          <div class="space-y-2 text-sm">
+            <div v-if="proc.pid" class="flex justify-between">
+              <span class="text-gray-400">PID:</span>
+              <span class="font-mono">{{ proc.pid }}</span>
+            </div>
+            
+            <div v-if="proc.port" class="flex justify-between">
+              <span class="text-gray-400">Port:</span>
+              <span class="font-mono">{{ proc.port }}</span>
+            </div>
+            
+            <div v-if="proc.cpu_percent !== null" class="flex justify-between">
+              <span class="text-gray-400">CPU:</span>
+              <span>{{ proc.cpu_percent }}%</span>
+            </div>
+            
+            <div v-if="proc.memory_percent !== null" class="flex justify-between">
+              <span class="text-gray-400">Memory:</span>
+              <span>{{ proc.memory_percent.toFixed(2) }}%</span>
+            </div>
+            
+            <div v-if="proc.uptime_seconds" class="flex justify-between">
+              <span class="text-gray-400">Uptime:</span>
+              <span>{{ formatDuration(proc.uptime_seconds) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Project Services -->
+    <section class="mb-6">
+      <h2 class="text-xl font-bold mb-4">📁 Project Services</h2>
+      
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div 
+          v-for="proc in projectProcesses" 
           :key="proc.name"
           class="bg-gray-800 rounded-lg p-6 card-hover transition"
           :class="{ 'opacity-75': !proc.running }"
@@ -178,10 +292,13 @@
     </section>
     
     <!-- Charts Section -->
-    <section class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <section class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
       <!-- CPU History Chart -->
       <div class="bg-gray-800 rounded-lg p-6">
-        <h3 class="text-lg font-bold mb-4">📈 CPU Usage History</h3>
+        <div class="flex justify-between items-center mb-4">
+          <h3 class="text-lg font-bold">📈 CPU Usage History</h3>
+          <span class="text-sm text-gray-400">{{ timeRange }}h</span>
+        </div>
         <div class="h-64">
           <canvas ref="cpuChart"></canvas>
         </div>
@@ -189,7 +306,10 @@
       
       <!-- Memory History Chart -->
       <div class="bg-gray-800 rounded-lg p-6">
-        <h3 class="text-lg font-bold mb-4">📈 Memory Usage History</h3>
+        <div class="flex justify-between items-center mb-4">
+          <h3 class="text-lg font-bold">📈 Memory Usage History</h3>
+          <span class="text-sm text-gray-400">{{ timeRange }}h</span>
+        </div>
         <div class="h-64">
           <canvas ref="memoryChart"></canvas>
         </div>
@@ -200,6 +320,7 @@
     <footer class="mt-8 text-center text-sm text-gray-500">
       <p>Last updated: {{ formatTime(systemMetrics?.timestamp) }}</p>
       <p class="mt-1">WebSocket: {{ wsConnected ? '🟢 Connected' : '🔴 Disconnected' }}</p>
+      <p class="mt-1 text-gray-600">Data retention: 7 days</p>
     </footer>
   </div>
 </template>
@@ -229,6 +350,22 @@ export default {
     const processMetrics = computed(() => metricsStore.processMetrics)
     const wsConnected = computed(() => metricsStore.wsConnected)
     const historyData = computed(() => metricsStore.historyData)
+    
+    // Categorize processes
+    const openclawProcesses = computed(() => {
+      const names = ['OpenClaw Gateway', 'OpenClaw Node', 'OpenClaw TUI']
+      return processMetrics.value?.processes?.filter(p => names.includes(p.name)) || []
+    })
+    
+    const externalProcesses = computed(() => {
+      const names = ['Ollama', 'Cloudflared']
+      return processMetrics.value?.processes?.filter(p => names.includes(p.name)) || []
+    })
+    
+    const projectProcesses = computed(() => {
+      const names = ['Monitoring Dashboard', 'Knowledge Graph API', 'Knowledge Graph UI', 'Personal Dashboard']
+      return processMetrics.value?.processes?.filter(p => names.includes(p.name)) || []
+    })
     
     function getCpuColorClass(percent) {
       if (!percent) return 'text-gray-400'
@@ -312,7 +449,12 @@ export default {
         },
         scales: {
           x: {
-            ticks: { color: '#9ca3af', maxTicksLimit: 8 },
+            ticks: { 
+              color: '#9ca3af', 
+              maxTicksLimit: timeRange.value <= 24 ? 12 : 14,
+              maxRotation: 45,
+              minRotation: 45
+            },
             grid: { color: '#374151' }
           },
           y: {
@@ -325,6 +467,16 @@ export default {
         interaction: {
           intersect: false,
           mode: 'index'
+        },
+        elements: {
+          point: {
+            radius: 0,
+            hitRadius: 10,
+            hoverRadius: 4
+          },
+          line: {
+            tension: 0.3
+          }
         }
       }
       
@@ -339,9 +491,7 @@ export default {
               borderColor: '#3b82f6',
               backgroundColor: 'rgba(59, 130, 246, 0.1)',
               borderWidth: 2,
-              fill: true,
-              tension: 0.4,
-              pointRadius: 0
+              fill: true
             }]
           },
           options: commonOptions
@@ -359,9 +509,7 @@ export default {
               borderColor: '#10b981',
               backgroundColor: 'rgba(16, 185, 129, 0.1)',
               borderWidth: 2,
-              fill: true,
-              tension: 0.4,
-              pointRadius: 0
+              fill: true
             }]
           },
           options: commonOptions
@@ -372,7 +520,18 @@ export default {
     function updateCharts() {
       if (!historyData.value.length) return
       
-      const labels = historyData.value.map(d => {
+      // Sort by timestamp to ensure correct order
+      const sortedData = [...historyData.value].sort((a, b) => a.timestamp - b.timestamp)
+      
+      // Downsample data for better performance with large datasets
+      const maxPoints = 200
+      let displayData = sortedData
+      if (sortedData.length > maxPoints) {
+        const step = Math.ceil(sortedData.length / maxPoints)
+        displayData = sortedData.filter((_, i) => i % step === 0)
+      }
+      
+      const labels = displayData.map(d => {
         const date = new Date(d.timestamp * 1000)
         if (timeRange.value <= 24) {
           return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -380,18 +539,20 @@ export default {
         return date.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit' })
       })
       
-      const cpuData = historyData.value.map(d => d.system?.cpu_percent || 0)
-      const memoryData = historyData.value.map(d => d.system?.memory_percent || 0)
+      const cpuData = displayData.map(d => d.system?.cpu_percent || 0)
+      const memoryData = displayData.map(d => d.system?.memory_percent || 0)
       
       if (cpuChartInstance) {
         cpuChartInstance.data.labels = labels
         cpuChartInstance.data.datasets[0].data = cpuData
+        cpuChartInstance.options.scales.x.ticks.maxTicksLimit = timeRange.value <= 24 ? 12 : 14
         cpuChartInstance.update('none')
       }
       
       if (memoryChartInstance) {
         memoryChartInstance.data.labels = labels
         memoryChartInstance.data.datasets[0].data = memoryData
+        memoryChartInstance.options.scales.x.ticks.maxTicksLimit = timeRange.value <= 24 ? 12 : 14
         memoryChartInstance.update('none')
       }
     }
@@ -399,6 +560,15 @@ export default {
     watch(historyData, updateCharts, { deep: true })
     watch(timeRange, async (newRange) => {
       await metricsStore.fetchHistory(newRange)
+      // Re-initialize charts to update x-axis tick settings
+      if (cpuChartInstance) {
+        cpuChartInstance.options.scales.x.ticks.maxTicksLimit = newRange <= 24 ? 12 : 14
+        cpuChartInstance.update()
+      }
+      if (memoryChartInstance) {
+        memoryChartInstance.options.scales.x.ticks.maxTicksLimit = newRange <= 24 ? 12 : 14
+        memoryChartInstance.update()
+      }
     })
     
     onMounted(async () => {
@@ -429,6 +599,9 @@ export default {
     return {
       systemMetrics,
       processMetrics,
+      openclawProcesses,
+      externalProcesses,
+      projectProcesses,
       wsConnected,
       timeRange,
       cpuChart,
