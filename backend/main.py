@@ -276,6 +276,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/", response_model=HealthResponse)
+async def root():
+    """Root endpoint - redirects to API health"""
+    return HealthResponse(status="healthy", timestamp=time.time())
+
 @app.get("/api/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint"""
