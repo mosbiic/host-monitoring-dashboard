@@ -62,9 +62,9 @@ export default {
       try {
         // Set token temporarily for validation
         const testToken = tokenInput.value
-        
-        // Verify token by making a test request with token
-        const response = await axios.get('/api/health', {
+
+        // Verify token by making a test request to an authenticated endpoint
+        const response = await axios.get('/api/metrics/system', {
           headers: {
             'Authorization': `Bearer ${testToken}`
           }
