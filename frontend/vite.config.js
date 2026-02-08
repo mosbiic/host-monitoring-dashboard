@@ -14,6 +14,8 @@ export default defineConfig({
         target: 'ws://localhost:8081',
         ws: true
       }
-    }
+    },
+    // Fixed port configuration
+    strictPort: true
   }
 })

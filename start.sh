@@ -1,8 +1,17 @@
 #!/bin/bash
 
 # Host Monitoring Dashboard Startup Script
+# 固定端口配置: 前端 3000, 后端 8081
+
+set -e
+
+# 固定端口
+FRONTEND_PORT=3000
+BACKEND_PORT=8081
 
 echo "🚀 Starting Host Monitoring Dashboard..."
+echo "   Frontend Port: $FRONTEND_PORT"
+echo "   Backend Port: $BACKEND_PORT"
 
 # Check if Python is installed
 if ! command -v python3 &> /dev/null; then
@@ -18,9 +27,8 @@ fi
 
 # Set default token if not set
 if [ -z "$DASHBOARD_TOKEN" ]; then
-    export DASHBOARD_TOKEN="changeme"
-    echo "⚠️  Using default token: changeme"
-    echo "   Set DASHBOARD_TOKEN environment variable to change it"
+    export DASHBOARD_TOKEN="mosbiic-dashboard-secure-token-2024"
+    echo "⚠️  Using default token"
 fi
 
 # Install backend dependencies if needed
@@ -35,7 +43,7 @@ source venv/bin/activate
 pip install -q -r requirements.txt
 
 # Start backend in background
-echo "🟢 Starting backend server on port 8080..."
+echo "🟢 Starting backend server on port $BACKEND_PORT..."
 python main.py &
 BACKEND_PID=$!
 
@@ -50,15 +58,15 @@ if [ ! -d "node_modules" ]; then
 fi
 
 # Start frontend
-echo "🟢 Starting frontend dev server on port 3000..."
-npm run dev &
+echo "🟢 Starting frontend dev server on port $FRONTEND_PORT..."
+npm run dev -- --port $FRONTEND_PORT &
 FRONTEND_PID=$!
 
 echo ""
 echo "✅ Dashboard is starting up!"
 echo ""
-echo "📊 Frontend: http://localhost:3000"
-echo "🔌 Backend API: http://localhost:8080"
+echo "📊 Frontend: http://localhost:$FRONTEND_PORT"
+echo "🔌 Backend API: http://localhost:$BACKEND_PORT"
 echo ""
 echo "Press Ctrl+C to stop both servers"
 echo ""
@@ -67,8 +75,8 @@ echo ""
 function cleanup {
     echo ""
     echo "🛑 Shutting down servers..."
-    kill $FRONTEND_PID 2>/dev/null
-    kill $BACKEND_PID 2>/dev/null
+    kill $FRONTEND_PID 2>/dev/null || true
+    kill $BACKEND_PID 2>/dev/null || true
     exit 0
 }
 
