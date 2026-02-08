@@ -120,7 +120,48 @@ Real-time system monitoring dashboard for Mac Mini with OpenClaw process health 
 
 ## Deployment
 
-### Production Build
+### Production Deployment with Cloudflare Tunnel
+
+The dashboard is configured for production deployment using Cloudflare Tunnel.
+
+#### 1. Cloudflare Tunnel Configuration
+
+Update your `~/.cloudflared/config.yml`:
+
+```yaml
+tunnel: YOUR_TUNNEL_ID
+credentials-file: ~/.cloudflared/YOUR_TUNNEL_ID.json
+
+ingress:
+  - hostname: monitoring.mosbiic.com
+    service: http://localhost:8080
+  - service: http_status:404
+```
+
+Then restart Cloudflared:
+```bash
+launchctl stop com.cloudflared.openclaw
+launchctl start com.cloudflared.openclaw
+```
+
+#### 2. macOS LaunchAgent (Auto-start)
+
+Install the LaunchAgent for automatic startup:
+
+```bash
+# Copy LaunchAgent
+cp ~/Library/LaunchAgents/com.mosbiic.monitoring-dashboard.plist ~/Library/LaunchAgents/
+
+# Load and start
+launchctl load ~/Library/LaunchAgents/com.mosbiic.monitoring-dashboard.plist
+launchctl start com.mosbiic.monitoring-dashboard
+```
+
+The LaunchAgent file is located at `~/Library/LaunchAgents/com.mosbiic.monitoring-dashboard.plist`
+
+#### 3. Production Build (Optional)
+
+For serving the frontend via backend:
 
 ```bash
 # Build frontend
@@ -129,12 +170,6 @@ npm run build
 
 # The built files will be in frontend/dist/
 # Serve with any static file server or configure FastAPI to serve them
-```
-
-### Using Docker (optional)
-
-```dockerfile
-# Dockerfile coming soon
 ```
 
 ### Systemd Service (Linux)
