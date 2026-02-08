@@ -221,8 +221,8 @@ async def metrics_collector():
             
             combined = {
                 "timestamp": system_metrics.timestamp,
-                "system": system_metrics.dict(),
-                "processes": [p.dict() for p in process_metrics.processes]
+                "system": system_metrics.model_dump(),
+                "processes": [p.model_dump() for p in process_metrics.processes]
             }
             
             metrics_history.append(combined)
@@ -339,17 +339,24 @@ async def websocket_endpoint(websocket: WebSocket):
         process_metrics = get_process_metrics()
         await websocket.send_json({
             "timestamp": system_metrics.timestamp,
-            "system": system_metrics.dict(),
-            "processes": [p.dict() for p in process_metrics.processes]
+            "system": system_metrics.model_dump(),
+            "processes": [p.model_dump() for p in process_metrics.processes]
         })
         
         # Keep connection alive and handle client messages
         while True:
             try:
-                data = await websocket.receive_text()
+                # Use timeout to allow periodic metrics updates even without client messages
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
                 # Handle ping/pong or other client messages
                 if data == "ping":
                     await websocket.send_text("pong")
+            except asyncio.TimeoutError:
+                # Send ping to keep connection alive
+                try:
+                    await websocket.send_text("ping")
+                except Exception:
+                    break
             except WebSocketDisconnect:
                 break
             except Exception:

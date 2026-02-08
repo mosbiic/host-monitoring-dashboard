@@ -77,9 +77,13 @@ export const useMetricsStore = defineStore('metrics', () => {
       ws.close()
     }
     
+    // Use current window location for WebSocket connection
+    // This ensures it works correctly through Cloudflare Tunnel
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsHost = import.meta.env.VITE_WS_HOST || window.location.host
+    const wsHost = window.location.host
     const wsUrl = `${wsProtocol}//${wsHost}/ws/metrics?token=${token}`
+    
+    console.log('Connecting WebSocket to:', wsUrl)
     
     ws = new WebSocket(wsUrl)
     
