@@ -27,9 +27,17 @@ axios.interceptors.response.use(
 )
 
 export const useAuthStore = defineStore('auth', () => {
+  // Cloudflare Access 模式下不需要存储 token
+  // 保留 token 支持本地开发模式
   const token = ref(localStorage.getItem('dashboard_token') || '')
+  const isCloudflareAccess = ref(false)
   
-  const isAuthenticated = computed(() => !!token.value)
+  const isAuthenticated = computed(() => {
+    // Cloudflare Access 模式下始终认为已认证
+    // 后端会验证 CF 传递的 headers
+    if (isCloudflareAccess.value) return true
+    return !!token.value
+  })
   
   function setToken(newToken) {
     token.value = newToken
@@ -43,6 +51,12 @@ export const useAuthStore = defineStore('auth', () => {
     delete axios.defaults.headers.common['Authorization']
   }
   
+  function enableCloudflareAccess() {
+    isCloudflareAccess.value = true
+    // 清除本地 token
+    logout()
+  }
+  
   // Initialize axios header if token exists
   if (token.value) {
     axios.defaults.headers.common['Authorization'] = `Bearer ${token.value}`
@@ -54,7 +68,7 @@ export const useAuthStore = defineStore('auth', () => {
     router.push('/login')
   })
   
-  return { token, isAuthenticated, setToken, logout }
+  return { token, isAuthenticated, isCloudflareAccess, setToken, logout, enableCloudflareAccess }
 })
 
 export const useMetricsStore = defineStore('metrics', () => {

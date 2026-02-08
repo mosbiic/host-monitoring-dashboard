@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
@@ -18,6 +18,7 @@ load_dotenv()
 
 # Configuration
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "changeme")
+CF_ACCESS_ENABLED = os.getenv("CF_ACCESS_ENABLED", "false").lower() == "true"
 DATA_RETENTION_HOURS = 24 * 7  # 7 days
 
 # Global state
@@ -55,12 +56,44 @@ class HealthResponse(BaseModel):
     timestamp: float
 
 # Security
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
+def verify_auth(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """
+    验证用户身份 - 支持 Cloudflare Access 或本地 Token
+    优先检查 Cloudflare Access Headers，如果不存在则检查本地 Token
+    本地开发模式 (CF_ACCESS_ENABLED=false 且未设置 DASHBOARD_TOKEN) 自动通过
+    """
+    # 1. 优先检查 Cloudflare Access Headers (SSO 模式)
+    cf_email = request.headers.get("CF-Access-Authenticated-User-Email")
+    cf_jwt = request.headers.get("CF-Access-Jwt-Assertion")
+    
+    if cf_email:
+        # Cloudflare Access 认证成功
+        return {"type": "cloudflare", "email": cf_email}
+    
+    # 2. 本地开发模式：如果未设置 DASHBOARD_TOKEN 且未启用 CF_ACCESS，自动通过
+    if (not DASHBOARD_TOKEN or DASHBOARD_TOKEN == "changeme") and not CF_ACCESS_ENABLED:
+        return {"type": "local_dev", "email": "local@dev"}
+    
+    # 3. 本地 Token 验证 (开发模式或 fallback)
+    if credentials and credentials.credentials == DASHBOARD_TOKEN:
+        return {"type": "token", "token": credentials.credentials}
+    
+    # 4. 检查 WebSocket 连接中的 token (query param)
+    token = request.query_params.get("token") if hasattr(request, 'query_params') else None
+    if token == DASHBOARD_TOKEN:
+        return {"type": "token", "token": token}
+    
+    # 认证失败
+    raise HTTPException(status_code=401, detail="Unauthorized")
+
+# 保留旧函数用于兼容性
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    if credentials.credentials != DASHBOARD_TOKEN:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    return credentials.credentials
+    """保留旧函数以兼容现有代码"""
+    if credentials and credentials.credentials == DASHBOARD_TOKEN:
+        return credentials.credentials
+    raise HTTPException(status_code=401, detail="Invalid token")
 
 def get_system_metrics() -> SystemMetrics:
     """Collect current system metrics using psutil"""
@@ -486,7 +519,7 @@ async def dashboard():
 
 @app.get("/login")
 async def login():
-    """Serve frontend HTML for /login route"""
+    """Serve frontend HTML for /login route - Cloudflare Access 已处理认证"""
     frontend_html = os.path.join(frontend_path, "index.html")
     if os.path.exists(frontend_html):
         return FileResponse(frontend_html)
@@ -497,13 +530,13 @@ async def health_check():
     """Health check endpoint"""
     return HealthResponse(status="healthy", timestamp=time.time())
 
-@app.get("/api/metrics/system", response_model=SystemMetrics)
-async def get_current_system_metrics(token: str = Depends(verify_token)):
+@app.get("/api/metrics/system")
+async def get_current_system_metrics(auth: dict = Depends(verify_auth)):
     """Get current system metrics"""
     return get_system_metrics()
 
-@app.get("/api/metrics/processes", response_model=ProcessMetrics)
-async def get_current_process_metrics(token: str = Depends(verify_token)):
+@app.get("/api/metrics/processes")
+async def get_current_process_metrics(auth: dict = Depends(verify_auth)):
     """Get current process metrics"""
     return get_process_metrics()
 
@@ -519,7 +552,7 @@ def downsample_data(data: List[Dict], max_points: int = 500) -> List[Dict]:
 @app.get("/api/metrics/history")
 async def get_metrics_history(
     hours: int = 24,
-    token: str = Depends(verify_token)
+    auth: dict = Depends(verify_auth)
 ):
     """Get historical metrics for the specified time period with downsampling"""
     cutoff = time.time() - (hours * 3600)
@@ -551,9 +584,14 @@ async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time metrics"""
     await websocket.accept()
     
-    # Verify token from query params or headers
+    # 验证 token 或 Cloudflare Access
     token = websocket.query_params.get("token")
-    if token != DASHBOARD_TOKEN:
+    cf_email = websocket.headers.get("CF-Access-Authenticated-User-Email")
+    
+    # 优先检查 Cloudflare Access，其次检查本地 token
+    is_authenticated = bool(cf_email) or (token == DASHBOARD_TOKEN)
+    
+    if not is_authenticated:
         await websocket.close(code=4001, reason="Invalid token")
         return
     
