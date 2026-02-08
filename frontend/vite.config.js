@@ -5,6 +5,7 @@ export default defineConfig({
   plugins: [vue()],
   server: {
     port: 3000,
+    allowedHosts: ['monitoring.mosbiic.com'],
     proxy: {
       '/api': {
         target: 'http://localhost:8081',
