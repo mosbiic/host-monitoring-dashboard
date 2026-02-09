@@ -75,6 +75,9 @@ export default {
     // 本地开发模式默认 Token
     const LOCAL_DEV_TOKEN = '43f4404377d1684d88fabbe5a2eb852af2d0f91955b9a6bd1d6aa26fed34ba9d'
     
+    // Track if CF auth check has been performed to prevent loops
+    let cfAuthChecked = false
+    
     // 检测认证模式
     onMounted(async () => {
       try {
@@ -88,17 +91,29 @@ export default {
         if (config.cloudflare_access_enabled) {
           isCloudflareMode.value = true
           
+          // 防止重复检查导致的循环
+          if (cfAuthChecked) {
+            console.log('[Login] CF auth check already performed, skipping')
+            return
+          }
+          cfAuthChecked = true
+          
           // 尝试访问受保护端点，如果成功说明已通过 CF Access 认证
           try {
+            console.log('[Login] CF Access enabled, verifying authentication...')
             await axios.get('/api/metrics/system')
+            console.log('[Login] CF Access auth verified, enabling cloudflare mode')
             authStore.enableCloudflareAccess()
-            router.push('/dashboard')
+            // 使用 replace 而不是 push，避免历史记录问题
+            router.replace('/dashboard')
           } catch (err) {
             // 如果返回 401，说明未通过 CF Access 认证
-            // Cloudflare 会自动重定向到登录页，我们只需显示加载状态
             if (err.response?.status === 401) {
-              console.log('Waiting for Cloudflare Access authentication...')
-              // 页面会被 Cloudflare 重定向，不需要额外处理
+              console.log('[Login] CF Access not authenticated (401)')
+              // 在 Cloudflare Access 模式下，如果未认证，Cloudflare 应该会自动重定向
+              // 我们只需要显示加载状态，等待 Cloudflare 处理
+            } else {
+              console.error('[Login] Error checking CF Access auth:', err.message)
             }
           }
           return
@@ -107,13 +122,14 @@ export default {
         // 3. 本地 Token 模式：尝试使用默认 Token 自动登录（本地开发）
         if (!config.require_token || config.require_token === false) {
           try {
+            console.log('[Login] Trying auto-login with no token required...')
             await axios.get('/api/metrics/system')
+            console.log('[Login] Auto-login successful')
             authStore.enableCloudflareAccess()
-            router.push('/dashboard')
+            router.replace('/dashboard')
             return
           } catch (autoLoginErr) {
-            // 自动登录失败，显示登录表单
-            console.log('Auto-login failed, showing login form')
+            console.log('[Login] Auto-login failed, showing login form')
           }
         }
         
@@ -121,16 +137,18 @@ export default {
         const savedToken = localStorage.getItem('dashboard_token')
         if (savedToken) {
           try {
+            console.log('[Login] Trying auto-login with saved token...')
             await axios.get('/api/metrics/system', {
               headers: {
                 'Authorization': `Bearer ${savedToken}`
               }
             })
+            console.log('[Login] Saved token valid')
             authStore.setToken(savedToken)
-            router.push('/dashboard')
+            router.replace('/dashboard')
             return
           } catch (tokenErr) {
-            // Token 无效，清除并显示登录表单
+            console.log('[Login] Saved token invalid, clearing')
             localStorage.removeItem('dashboard_token')
           }
         }
@@ -138,23 +156,24 @@ export default {
         // 5. 最后尝试使用默认开发 Token 自动登录
         if (!config.require_token) {
           try {
+            console.log('[Login] Trying auto-login with dev token...')
             await axios.get('/api/metrics/system', {
               headers: {
                 'Authorization': `Bearer ${LOCAL_DEV_TOKEN}`
               }
             })
+            console.log('[Login] Dev token auto-login successful')
             authStore.setToken(LOCAL_DEV_TOKEN)
-            router.push('/dashboard')
+            router.replace('/dashboard')
             return
           } catch (devTokenErr) {
-            console.log('Dev token auto-login failed')
+            console.log('[Login] Dev token auto-login failed')
           }
         }
         
       } catch (err) {
-        console.error('Failed to load auth config:', err)
+        console.error('[Login] Failed to load auth config:', err)
         isLoadingConfig.value = false
-        // 如果无法加载配置，回退到本地 Token 模式
         isCloudflareMode.value = false
       }
     })
