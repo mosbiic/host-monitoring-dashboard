@@ -7,3 +7,5 @@ INFO:     connection closed
 INFO:     ('127.0.0.1', 58933) - "WebSocket /ws/metrics" [accepted]
 INFO:     connection open
 INFO:     connection closed
+INFO:     connection rejected (400 Bad Request)
+INFO:     connection closed
