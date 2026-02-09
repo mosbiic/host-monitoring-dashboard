@@ -13,7 +13,9 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env from the project root (parent of backend directory)
+env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
+load_dotenv(env_path)
 
 # Configuration
 DATA_RETENTION_HOURS = 24 * 7  # 7 days
@@ -592,16 +594,28 @@ async def websocket_endpoint(websocket: WebSocket):
     print(f"[WS Auth Debug] Host: {host}")
     print(f"[WS Auth Debug] CF-Access-Authenticated-User-Email: {cf_email}")
     print(f"[WS Auth Debug] CF-Access-Jwt-Assertion exists: {bool(cf_jwt)}")
-    print(f"[WS Auth Debug] All headers: {dict(websocket.headers)}")
+    
+    # 获取客户端真实 IP (通过 X-Forwarded-For 或 X-Real-IP)
+    forwarded_for = websocket.headers.get("X-Forwarded-For", "")
+    real_ip = websocket.headers.get("X-Real-IP", "")
+    client_ip = forwarded_for.split(",")[0].strip() if forwarded_for else (real_ip or "unknown")
+    print(f"[WS Auth Debug] Client IP: {client_ip}")
+    
+    # 检查是否允许无认证访问 (通过环境变量配置)
+    allow_no_auth = os.getenv("WS_ALLOW_NO_AUTH", "false").lower() == "true"
     
     # 1. 优先检查 Cloudflare Access Headers
     if cf_email:
         print(f"[WS Auth] Cloudflare Access 认证成功: {cf_email}")
         # 认证通过，继续处理
-    # 2. 本地开发模式
+    # 2. 本地开发模式 (localhost 或 127.0.0.1)
     elif "localhost" in host or "127.0.0.1" in host:
         print(f"[WS Auth] 本地开发模式通过: {host}")
-        cf_email = "localhost@dev"  # 设置默认值以便后续使用
+        cf_email = "localhost@dev"
+    # 3. 允许无认证模式 (用于 Cloudflare Tunnel 后面)
+    elif allow_no_auth:
+        print(f"[WS Auth] 无认证模式允许: {client_ip}")
+        cf_email = "anonymous@tunnel"
     else:
         print(f"[WS Auth] 认证失败 - 未找到 Cloudflare Headers")
         await websocket.close(code=4001, reason="Authentication required")
@@ -648,4 +662,19 @@ async def websocket_endpoint(websocket: WebSocket):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=18081)
+    import signal
+    import sys
+    
+    port = int(os.getenv("BACKEND_PORT", 18081))
+    
+    def signal_handler(sig, frame):
+        print('\nShutting down gracefully...')
+        sys.exit(0)
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    print(f"Starting server on port {port}")
+    print(f"WS_ALLOW_NO_AUTH: {os.getenv('WS_ALLOW_NO_AUTH', 'not set')}")
+    
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")

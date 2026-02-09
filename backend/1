@@ -1,0 +1,9 @@
+INFO:     Started server process [76755]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:18081 (Press CTRL+C to quit)
+INFO:     connection rejected (400 Bad Request)
+INFO:     connection closed
+INFO:     ('127.0.0.1', 58933) - "WebSocket /ws/metrics" [accepted]
+INFO:     connection open
+INFO:     connection closed
