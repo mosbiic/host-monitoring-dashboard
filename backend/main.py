@@ -55,23 +55,20 @@ class HealthResponse(BaseModel):
 
 def verify_auth(request: Request):
     """
-    验证用户身份 - 只使用 Cloudflare Access Headers
-    本地开发模式 (localhost) 提示使用 Cloudflare Tunnel
+    验证用户身份 - 优先检查 IP 白名单，然后 Cloudflare Access Headers
+    本地开发模式 (localhost/127.0.0.1/::1) 自动通过认证
     """
-    # 1. 检查 Cloudflare Access Headers (SSO 模式)
+    # 1. 检查 IP 白名单（本地开发自动通过）
+    client_ip = request.client.host if request.client else None
+    if client_ip in ("127.0.0.1", "localhost", "::1"):
+        return {"type": "local", "email": "localhost@dev"}
+    
+    # 2. 检查 Cloudflare Access Headers (SSO 模式)
     cf_email = request.headers.get("CF-Access-Authenticated-User-Email")
     
     if cf_email:
         # Cloudflare Access 认证成功
         return {"type": "cloudflare", "email": cf_email}
-    
-    # 2. 本地开发模式检测
-    host = request.headers.get("Host", "")
-    if "localhost" in host or "127.0.0.1" in host:
-        raise HTTPException(
-            status_code=401, 
-            detail="Local development mode. Please use Cloudflare Tunnel (https://*.mosbiic.com) or set up local CF Access headers for testing."
-        )
     
     # 3. 生产环境必须通过 Cloudflare Access
     raise HTTPException(
