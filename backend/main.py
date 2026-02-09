@@ -55,22 +55,31 @@ class HealthResponse(BaseModel):
 
 def verify_auth(request: Request):
     """
-    验证用户身份 - 优先检查 IP 白名单，然后 Cloudflare Access Headers
+    验证用户身份 - 优先检查 Cloudflare Access Headers (生产环境)
     本地开发模式 (localhost/127.0.0.1/::1) 自动通过认证
     """
-    # 1. 检查 IP 白名单（本地开发自动通过）
     client_ip = request.client.host if request.client else None
-    if client_ip in ("127.0.0.1", "localhost", "::1"):
-        return {"type": "local", "email": "localhost@dev"}
-    
-    # 2. 检查 Cloudflare Access Headers (SSO 模式)
     cf_email = request.headers.get("CF-Access-Authenticated-User-Email")
+    cf_jwt = request.headers.get("CF-Access-Jwt-Assertion")
     
+    # 调试日志 - 记录所有接收到的 Headers
+    print(f"[Auth Debug] Client IP: {client_ip}")
+    print(f"[Auth Debug] CF-Access-Authenticated-User-Email: {cf_email}")
+    print(f"[Auth Debug] CF-Access-Jwt-Assertion exists: {bool(cf_jwt)}")
+    print(f"[Auth Debug] All headers: {dict(request.headers)}")
+    
+    # 1. 优先检查 Cloudflare Access Headers (生产环境)
     if cf_email:
-        # Cloudflare Access 认证成功
+        print(f"[Auth] Cloudflare Access 认证成功: {cf_email}")
         return {"type": "cloudflare", "email": cf_email}
     
+    # 2. 检查 IP 白名单（本地开发自动通过）
+    if client_ip in ("127.0.0.1", "localhost", "::1"):
+        print(f"[Auth] 本地开发模式通过: {client_ip}")
+        return {"type": "local", "email": "localhost@dev"}
+    
     # 3. 生产环境必须通过 Cloudflare Access
+    print(f"[Auth] 认证失败 - 未找到 Cloudflare Headers，IP: {client_ip}")
     raise HTTPException(
         status_code=401, 
         detail="Authentication required. Please access via https://*.mosbiic.com with Cloudflare Access."
@@ -574,18 +583,27 @@ async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time metrics"""
     await websocket.accept()
     
-    # 只检查 Cloudflare Access Headers
+    # 获取 WebSocket 连接信息
     cf_email = websocket.headers.get("CF-Access-Authenticated-User-Email")
-    
-    # 本地开发模式检测
+    cf_jwt = websocket.headers.get("CF-Access-Jwt-Assertion")
     host = websocket.headers.get("Host", "")
-    is_localhost = "localhost" in host or "127.0.0.1" in host
     
-    if not cf_email and is_localhost:
-        await websocket.close(code=4001, reason="Local development mode. Use Cloudflare Tunnel.")
-        return
+    # 调试日志
+    print(f"[WS Auth Debug] Host: {host}")
+    print(f"[WS Auth Debug] CF-Access-Authenticated-User-Email: {cf_email}")
+    print(f"[WS Auth Debug] CF-Access-Jwt-Assertion exists: {bool(cf_jwt)}")
+    print(f"[WS Auth Debug] All headers: {dict(websocket.headers)}")
     
-    if not cf_email:
+    # 1. 优先检查 Cloudflare Access Headers
+    if cf_email:
+        print(f"[WS Auth] Cloudflare Access 认证成功: {cf_email}")
+        # 认证通过，继续处理
+    # 2. 本地开发模式
+    elif "localhost" in host or "127.0.0.1" in host:
+        print(f"[WS Auth] 本地开发模式通过: {host}")
+        cf_email = "localhost@dev"  # 设置默认值以便后续使用
+    else:
+        print(f"[WS Auth] 认证失败 - 未找到 Cloudflare Headers")
         await websocket.close(code=4001, reason="Authentication required")
         return
     
