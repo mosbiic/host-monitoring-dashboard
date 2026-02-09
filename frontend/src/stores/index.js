@@ -17,7 +17,7 @@ axios.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      console.warn('Unauthorized: Token is invalid or expired')
+      console.warn('Unauthorized: Cloudflare Access authentication required')
       if (onUnauthorizedCallback) {
         onUnauthorizedCallback()
       }
@@ -28,47 +28,29 @@ axios.interceptors.response.use(
 
 export const useAuthStore = defineStore('auth', () => {
   // Cloudflare Access 模式下不需要存储 token
-  // 保留 token 支持本地开发模式
-  const token = ref(localStorage.getItem('dashboard_token') || '')
   const isCloudflareAccess = ref(false)
   
   const isAuthenticated = computed(() => {
     // Cloudflare Access 模式下始终认为已认证
     // 后端会验证 CF 传递的 headers
-    if (isCloudflareAccess.value) return true
-    return !!token.value
+    return isCloudflareAccess.value
   })
-  
-  function setToken(newToken) {
-    token.value = newToken
-    localStorage.setItem('dashboard_token', newToken)
-    axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`
-  }
-  
-  function logout() {
-    token.value = ''
-    localStorage.removeItem('dashboard_token')
-    delete axios.defaults.headers.common['Authorization']
-  }
   
   function enableCloudflareAccess() {
     isCloudflareAccess.value = true
-    // 清除本地 token
-    logout()
   }
   
-  // Initialize axios header if token exists
-  if (token.value) {
-    axios.defaults.headers.common['Authorization'] = `Bearer ${token.value}`
+  function logout() {
+    isCloudflareAccess.value = false
   }
   
   // Set up unauthorized callback
   setOnUnauthorizedCallback(() => {
-    logout()
+    isCloudflareAccess.value = false
     router.push('/login')
   })
   
-  return { token, isAuthenticated, isCloudflareAccess, setToken, logout, enableCloudflareAccess }
+  return { isAuthenticated, isCloudflareAccess, enableCloudflareAccess, logout }
 })
 
 export const useMetricsStore = defineStore('metrics', () => {
@@ -114,7 +96,7 @@ export const useMetricsStore = defineStore('metrics', () => {
     }
   }
   
-  function connectWebSocket(token, onAuthError = null) {
+  function connectWebSocket(onAuthError = null) {
     if (ws) {
       ws.close()
     }
@@ -123,7 +105,7 @@ export const useMetricsStore = defineStore('metrics', () => {
     // This ensures it works correctly through Cloudflare Tunnel
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const wsHost = window.location.host
-    const wsUrl = `${wsProtocol}//${wsHost}/ws/metrics?token=${token}`
+    const wsUrl = `${wsProtocol}//${wsHost}/ws/metrics`
     
     console.log('Connecting WebSocket to:', wsUrl)
     
@@ -152,7 +134,7 @@ export const useMetricsStore = defineStore('metrics', () => {
         // Check for auth errors from server
         if (data.error) {
           console.error('WebSocket error message:', data.error)
-          if (data.error.includes('Unauthorized') || data.error.includes('Invalid token')) {
+          if (data.error.includes('Unauthorized') || data.error.includes('Authentication required')) {
             wsConnected.value = false
             if (onAuthError) {
               onAuthError(true)
@@ -182,8 +164,8 @@ export const useMetricsStore = defineStore('metrics', () => {
       console.log('WebSocket disconnected:', event.code, event.reason)
       wsConnected.value = false
       
-      // Check if closed due to authentication (code 1008 = policy violation)
-      if (event.code === 1008 || event.code === 1001) {
+      // Check if closed due to authentication (code 1008 = policy violation, 4001 = custom auth error)
+      if (event.code === 1008 || event.code === 4001) {
         console.warn('WebSocket closed possibly due to auth failure')
         if (onAuthError) {
           onAuthError(true)
@@ -193,8 +175,8 @@ export const useMetricsStore = defineStore('metrics', () => {
       
       // Auto-reconnect after 5 seconds (unless auth error)
       reconnectTimeout = setTimeout(() => {
-        if (token && !wsConnected.value) {
-          connectWebSocket(token, onAuthError)
+        if (!wsConnected.value) {
+          connectWebSocket(onAuthError)
         }
       }, 5000)
     }

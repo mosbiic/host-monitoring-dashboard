@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
@@ -17,8 +16,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configuration
-DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "changeme")
-CF_ACCESS_ENABLED = os.getenv("CF_ACCESS_ENABLED", "false").lower() == "true"
 DATA_RETENTION_HOURS = 24 * 7  # 7 days
 
 # Global state
@@ -55,45 +52,33 @@ class HealthResponse(BaseModel):
     status: str
     timestamp: float
 
-# Security
-security = HTTPBearer(auto_error=False)
 
-def verify_auth(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
+def verify_auth(request: Request):
     """
-    验证用户身份 - 支持 Cloudflare Access 或本地 Token
-    优先检查 Cloudflare Access Headers，如果不存在则检查本地 Token
-    本地开发模式 (CF_ACCESS_ENABLED=false 且未设置 DASHBOARD_TOKEN) 自动通过
+    验证用户身份 - 只使用 Cloudflare Access Headers
+    本地开发模式 (localhost) 提示使用 Cloudflare Tunnel
     """
-    # 1. 优先检查 Cloudflare Access Headers (SSO 模式)
+    # 1. 检查 Cloudflare Access Headers (SSO 模式)
     cf_email = request.headers.get("CF-Access-Authenticated-User-Email")
-    cf_jwt = request.headers.get("CF-Access-Jwt-Assertion")
     
     if cf_email:
         # Cloudflare Access 认证成功
         return {"type": "cloudflare", "email": cf_email}
     
-    # 2. 本地开发模式：如果未设置 DASHBOARD_TOKEN 且未启用 CF_ACCESS，自动通过
-    if (not DASHBOARD_TOKEN or DASHBOARD_TOKEN == "changeme") and not CF_ACCESS_ENABLED:
-        return {"type": "local_dev", "email": "local@dev"}
+    # 2. 本地开发模式检测
+    host = request.headers.get("Host", "")
+    if "localhost" in host or "127.0.0.1" in host:
+        raise HTTPException(
+            status_code=401, 
+            detail="Local development mode. Please use Cloudflare Tunnel (https://*.mosbiic.com) or set up local CF Access headers for testing."
+        )
     
-    # 3. 本地 Token 验证 (开发模式或 fallback)
-    if credentials and credentials.credentials == DASHBOARD_TOKEN:
-        return {"type": "token", "token": credentials.credentials}
-    
-    # 4. 检查 WebSocket 连接中的 token (query param)
-    token = request.query_params.get("token") if hasattr(request, 'query_params') else None
-    if token == DASHBOARD_TOKEN:
-        return {"type": "token", "token": token}
-    
-    # 认证失败
-    raise HTTPException(status_code=401, detail="Unauthorized")
+    # 3. 生产环境必须通过 Cloudflare Access
+    raise HTTPException(
+        status_code=401, 
+        detail="Authentication required. Please access via https://*.mosbiic.com with Cloudflare Access."
+    )
 
-# 保留旧函数用于兼容性
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """保留旧函数以兼容现有代码"""
-    if credentials and credentials.credentials == DASHBOARD_TOKEN:
-        return credentials.credentials
-    raise HTTPException(status_code=401, detail="Invalid token")
 
 def get_system_metrics() -> SystemMetrics:
     """Collect current system metrics using psutil"""
@@ -532,10 +517,10 @@ async def health_check():
 
 @app.get("/api/auth/config")
 async def get_auth_config():
-    """Get authentication configuration for frontend"""
+    """Get authentication configuration for frontend - 始终返回 Cloudflare Access 模式"""
     return {
-        "cloudflare_access_enabled": CF_ACCESS_ENABLED,
-        "require_token": not CF_ACCESS_ENABLED and DASHBOARD_TOKEN and DASHBOARD_TOKEN != "changeme"
+        "cloudflare_access_enabled": True,
+        "require_token": False
     }
 
 @app.get("/api/metrics/system")
@@ -592,15 +577,19 @@ async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time metrics"""
     await websocket.accept()
     
-    # 验证 token 或 Cloudflare Access
-    token = websocket.query_params.get("token")
+    # 只检查 Cloudflare Access Headers
     cf_email = websocket.headers.get("CF-Access-Authenticated-User-Email")
     
-    # 优先检查 Cloudflare Access，其次检查本地 token
-    is_authenticated = bool(cf_email) or (token == DASHBOARD_TOKEN)
+    # 本地开发模式检测
+    host = websocket.headers.get("Host", "")
+    is_localhost = "localhost" in host or "127.0.0.1" in host
     
-    if not is_authenticated:
-        await websocket.close(code=4001, reason="Invalid token")
+    if not cf_email and is_localhost:
+        await websocket.close(code=4001, reason="Local development mode. Use Cloudflare Tunnel.")
+        return
+    
+    if not cf_email:
+        await websocket.close(code=4001, reason="Authentication required")
         return
     
     active_connections.append(websocket)
