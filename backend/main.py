@@ -530,6 +530,14 @@ async def health_check():
     """Health check endpoint"""
     return HealthResponse(status="healthy", timestamp=time.time())
 
+@app.get("/api/auth/config")
+async def get_auth_config():
+    """Get authentication configuration for frontend"""
+    return {
+        "cloudflare_access_enabled": CF_ACCESS_ENABLED,
+        "require_token": not CF_ACCESS_ENABLED and DASHBOARD_TOKEN and DASHBOARD_TOKEN != "changeme"
+    }
+
 @app.get("/api/metrics/system")
 async def get_current_system_metrics(auth: dict = Depends(verify_auth)):
     """Get current system metrics"""
