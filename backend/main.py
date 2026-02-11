@@ -57,48 +57,27 @@ class HealthResponse(BaseModel):
 
 def verify_auth(request: Request):
     """
-    验证用户身份 - 支持 Cloudflare Access 或 Token 认证
+    验证用户身份 - 仅 Cloudflare Access
     """
     client_ip = request.client.host if request.client else None
     cf_email = request.headers.get("CF-Access-Authenticated-User-Email")
     cf_jwt = request.headers.get("CF-Access-Jwt-Assertion")
-    cf_access_enabled = os.getenv("CF_ACCESS_ENABLED", "true").lower() == "true"
     
-    # 调试日志 - 记录所有接收到的 Headers
+    # 调试日志
     print(f"[Auth Debug] Client IP: {client_ip}")
     print(f"[Auth Debug] CF-Access-Authenticated-User-Email: {cf_email}")
     print(f"[Auth Debug] CF-Access-Jwt-Assertion exists: {bool(cf_jwt)}")
-    print(f"[Auth Debug] CF_ACCESS_ENABLED: {cf_access_enabled}")
     
-    # 1. 优先检查 Cloudflare Access Headers (生产环境)
+    # 仅检查 Cloudflare Access Headers
     if cf_email:
         print(f"[Auth] Cloudflare Access 认证成功: {cf_email}")
         return {"type": "cloudflare", "email": cf_email}
     
-    # 2. Token-based authentication (本地开发或备用模式)
-    if not cf_access_enabled:
-        # 检查 query param token
-        token = request.query_params.get("token")
-        # 检查 header Authorization: Bearer <token>
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
-        
-        expected_token = os.getenv("DASHBOARD_TOKEN", "")
-        if token and expected_token and token == expected_token:
-            print(f"[Auth] Token 认证成功")
-            return {"type": "token", "email": "token@user"}
-        
-        # 3. 本地开发 IP 白名单（当 CF_ACCESS_ENABLED=false 时）
-        if client_ip in ("127.0.0.1", "localhost", "::1"):
-            print(f"[Auth] 本地开发模式通过: {client_ip}")
-            return {"type": "local", "email": "localhost@dev"}
-    
-    # 4. 认证失败
-    print(f"[Auth] 认证失败 - 未找到认证信息，IP: {client_ip}")
+    # 认证失败
+    print(f"[Auth] 认证失败 - 未找到 Cloudflare Access headers，IP: {client_ip}")
     raise HTTPException(
         status_code=401, 
-        detail="Authentication required. Please provide valid Cloudflare Access headers or token."
+        detail="Authentication required. Please access through Cloudflare Access."
     )
 
 
@@ -504,7 +483,7 @@ app.add_middleware(
 )
 
 # Static files - serve frontend build
-frontend_path = "/Users/mosbii/.openclaw/workspace/host-monitoring-dashboard/frontend/dist"
+frontend_path = "/Users/mosbii/Projects/host-monitoring-dashboard/frontend/dist"
 if os.path.exists(frontend_path):
     app.mount("/assets", StaticFiles(directory=os.path.join(frontend_path, "assets")), name="assets")
 
@@ -524,14 +503,6 @@ async def dashboard():
         return FileResponse(frontend_html)
     raise HTTPException(status_code=404, detail="Frontend not built")
 
-@app.get("/login")
-async def login():
-    """Serve frontend HTML for /login route - Cloudflare Access 已处理认证"""
-    frontend_html = os.path.join(frontend_path, "index.html")
-    if os.path.exists(frontend_html):
-        return FileResponse(frontend_html)
-    raise HTTPException(status_code=404, detail="Frontend not built")
-
 @app.get("/api/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint"""
@@ -539,11 +510,10 @@ async def health_check():
 
 @app.get("/api/auth/config")
 async def get_auth_config():
-    """Get authentication configuration for frontend"""
-    cf_access_enabled = os.getenv("CF_ACCESS_ENABLED", "true").lower() == "true"
+    """Get authentication configuration - 仅 Cloudflare Access"""
     return {
-        "cloudflare_access_enabled": cf_access_enabled,
-        "require_token": not cf_access_enabled
+        "cloudflare_access_enabled": True,
+        "require_token": False
     }
 
 @app.get("/api/metrics/system")
@@ -610,27 +580,10 @@ async def websocket_endpoint(websocket: WebSocket):
     print(f"[WS Auth Debug] CF-Access-Authenticated-User-Email: {cf_email}")
     print(f"[WS Auth Debug] CF-Access-Jwt-Assertion exists: {bool(cf_jwt)}")
     
-    # 获取客户端真实 IP (通过 X-Forwarded-For 或 X-Real-IP)
-    forwarded_for = websocket.headers.get("X-Forwarded-For", "")
-    real_ip = websocket.headers.get("X-Real-IP", "")
-    client_ip = forwarded_for.split(",")[0].strip() if forwarded_for else (real_ip or "unknown")
-    print(f"[WS Auth Debug] Client IP: {client_ip}")
-    
-    # 检查是否允许无认证访问 (通过环境变量配置)
-    allow_no_auth = os.getenv("WS_ALLOW_NO_AUTH", "false").lower() == "true"
-    
-    # 1. 优先检查 Cloudflare Access Headers
+    # 仅检查 Cloudflare Access Headers
     if cf_email:
         print(f"[WS Auth] Cloudflare Access 认证成功: {cf_email}")
         # 认证通过，继续处理
-    # 2. 本地开发模式 (localhost 或 127.0.0.1)
-    elif "localhost" in host or "127.0.0.1" in host:
-        print(f"[WS Auth] 本地开发模式通过: {host}")
-        cf_email = "localhost@dev"
-    # 3. 允许无认证模式 (用于 Cloudflare Tunnel 后面)
-    elif allow_no_auth:
-        print(f"[WS Auth] 无认证模式允许: {client_ip}")
-        cf_email = "anonymous@tunnel"
     else:
         print(f"[WS Auth] 认证失败 - 未找到 Cloudflare Headers")
         await websocket.close(code=4001, reason="Authentication required")
@@ -690,6 +643,5 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, signal_handler)
     
     print(f"Starting server on port {port}")
-    print(f"WS_ALLOW_NO_AUTH: {os.getenv('WS_ALLOW_NO_AUTH', 'not set')}")
     
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")

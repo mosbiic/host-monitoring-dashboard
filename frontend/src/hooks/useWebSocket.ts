@@ -1,12 +1,10 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useMetricsStore } from '../stores/useMetricsStore';
-import { useAuthStore } from '../stores/useAuthStore';
 
-export function useWebSocket(onAuthError?: () => void) {
+export function useWebSocket() {
   const ws = useRef<WebSocket | null>(null);
   const reconnectTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { setWsConnected, setWsError, setSystemMetrics, setProcessMetrics } = useMetricsStore();
-  const { logout } = useAuthStore();
 
   const connect = useCallback(() => {
     if (ws.current?.readyState === WebSocket.OPEN) {
@@ -41,15 +39,9 @@ export function useWebSocket(onAuthError?: () => void) {
 
         const data = JSON.parse(event.data);
 
-        // Check for auth errors from server
         if (data.error) {
           console.error('[WebSocket] Error message:', data.error);
-          if (data.error.includes('Unauthorized') || data.error.includes('Authentication required')) {
-            setWsConnected(false);
-            logout();
-            onAuthError?.();
-            return;
-          }
+          return;
         }
 
         if (data.system) {
@@ -76,21 +68,13 @@ export function useWebSocket(onAuthError?: () => void) {
       console.log('[WebSocket] Disconnected:', event.code, event.reason);
       setWsConnected(false);
 
-      // Check if closed due to authentication (code 1008 = policy violation, 4001 = custom auth error)
-      if (event.code === 1008 || event.code === 4001) {
-        console.warn('[WebSocket] Closed possibly due to auth failure');
-        logout();
-        onAuthError?.();
-        return;
-      }
-
-      // Auto-reconnect after 5 seconds (unless auth error)
+      // Auto-reconnect after 5 seconds
       reconnectTimeout.current = setTimeout(() => {
         console.log('[WebSocket] Attempting to reconnect...');
         connect();
       }, 5000);
     };
-  }, [setWsConnected, setWsError, setSystemMetrics, setProcessMetrics, logout, onAuthError]);
+  }, [setWsConnected, setWsError, setSystemMetrics, setProcessMetrics]);
 
   const disconnect = useCallback(() => {
     if (reconnectTimeout.current) {

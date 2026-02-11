@@ -1,7 +1,5 @@
 import { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useMetricsStore } from '../stores/useMetricsStore';
-import { useAuthStore } from '../stores/useAuthStore';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useHistoryQuery } from '../hooks/useMetrics';
 import { MetricCard } from '../components/MetricCard';
@@ -21,7 +19,6 @@ import {
 import type { ProcessInfo, TimeRange } from '../types';
 
 export function Dashboard() {
-  const navigate = useNavigate();
   const { 
     systemMetrics, 
     processMetrics, 
@@ -30,11 +27,8 @@ export function Dashboard() {
     setTimeRange, 
     setHistoryData 
   } = useMetricsStore();
-  const { isAuthenticated } = useAuthStore();
   
-  const { connect, disconnect } = useWebSocket(() => {
-    navigate('/login');
-  });
+  const { connect, disconnect } = useWebSocket();
 
   // Fetch history data
   const { data: historyResponse } = useHistoryQuery(timeRange);
@@ -48,13 +42,11 @@ export function Dashboard() {
 
   // Connect WebSocket on mount
   useEffect(() => {
-    if (isAuthenticated) {
-      connect();
-    }
+    connect();
     return () => {
       disconnect();
     };
-  }, [isAuthenticated, connect, disconnect]);
+  }, [connect, disconnect]);
 
   const handleTimeRangeChange = (range: TimeRange) => {
     setTimeRange(range);
