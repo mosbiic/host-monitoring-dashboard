@@ -57,34 +57,48 @@ class HealthResponse(BaseModel):
 
 def verify_auth(request: Request):
     """
-    验证用户身份 - 优先检查 Cloudflare Access Headers (生产环境)
-    本地开发模式 (localhost/127.0.0.1/::1) 自动通过认证
+    验证用户身份 - 支持 Cloudflare Access 或 Token 认证
     """
     client_ip = request.client.host if request.client else None
     cf_email = request.headers.get("CF-Access-Authenticated-User-Email")
     cf_jwt = request.headers.get("CF-Access-Jwt-Assertion")
+    cf_access_enabled = os.getenv("CF_ACCESS_ENABLED", "true").lower() == "true"
     
     # 调试日志 - 记录所有接收到的 Headers
     print(f"[Auth Debug] Client IP: {client_ip}")
     print(f"[Auth Debug] CF-Access-Authenticated-User-Email: {cf_email}")
     print(f"[Auth Debug] CF-Access-Jwt-Assertion exists: {bool(cf_jwt)}")
-    print(f"[Auth Debug] All headers: {dict(request.headers)}")
+    print(f"[Auth Debug] CF_ACCESS_ENABLED: {cf_access_enabled}")
     
     # 1. 优先检查 Cloudflare Access Headers (生产环境)
     if cf_email:
         print(f"[Auth] Cloudflare Access 认证成功: {cf_email}")
         return {"type": "cloudflare", "email": cf_email}
     
-    # 2. 检查 IP 白名单（本地开发自动通过）
-    if client_ip in ("127.0.0.1", "localhost", "::1"):
-        print(f"[Auth] 本地开发模式通过: {client_ip}")
-        return {"type": "local", "email": "localhost@dev"}
+    # 2. Token-based authentication (本地开发或备用模式)
+    if not cf_access_enabled:
+        # 检查 query param token
+        token = request.query_params.get("token")
+        # 检查 header Authorization: Bearer <token>
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+        
+        expected_token = os.getenv("DASHBOARD_TOKEN", "")
+        if token and expected_token and token == expected_token:
+            print(f"[Auth] Token 认证成功")
+            return {"type": "token", "email": "token@user"}
+        
+        # 3. 本地开发 IP 白名单（当 CF_ACCESS_ENABLED=false 时）
+        if client_ip in ("127.0.0.1", "localhost", "::1"):
+            print(f"[Auth] 本地开发模式通过: {client_ip}")
+            return {"type": "local", "email": "localhost@dev"}
     
-    # 3. 生产环境必须通过 Cloudflare Access
-    print(f"[Auth] 认证失败 - 未找到 Cloudflare Headers，IP: {client_ip}")
+    # 4. 认证失败
+    print(f"[Auth] 认证失败 - 未找到认证信息，IP: {client_ip}")
     raise HTTPException(
         status_code=401, 
-        detail="Authentication required. Please access via https://*.mosbiic.com with Cloudflare Access."
+        detail="Authentication required. Please provide valid Cloudflare Access headers or token."
     )
 
 
@@ -525,10 +539,11 @@ async def health_check():
 
 @app.get("/api/auth/config")
 async def get_auth_config():
-    """Get authentication configuration for frontend - 始终返回 Cloudflare Access 模式"""
+    """Get authentication configuration for frontend"""
+    cf_access_enabled = os.getenv("CF_ACCESS_ENABLED", "true").lower() == "true"
     return {
-        "cloudflare_access_enabled": True,
-        "require_token": False
+        "cloudflare_access_enabled": cf_access_enabled,
+        "require_token": not cf_access_enabled
     }
 
 @app.get("/api/metrics/system")
